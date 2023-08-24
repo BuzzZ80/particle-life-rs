@@ -36,9 +36,8 @@ fn vs_main(
 
     if (vx % u32(6) == u32(0)) {
         let rmin = 5.0;
-        let racc = 6.0;
+        let racc = 100.0;
         let mu = 2.0;
-        var acc = 1.0;
 
         var a = vec2(0.0, 0.0);
         for (var c: u32 = u32(0); c < arrayLength(&circles); c++) {
@@ -47,6 +46,23 @@ fn vs_main(
             // get vector and length between self and other
             let diff = circles[ix].pos - circles[c].pos;
             let d = length(diff);
+
+            var acc = 0.0;
+            let c1 = instance.color;
+            let c2 = circles[c].color;
+            if c1.x == 1.0 {
+                if c2.x == 1.0 {
+                    acc = 10.0;
+                } else {
+                    acc = 5.0;
+                }
+            } else if c1.y == 1.0 {
+                if c2.y == 1.0 {
+                    acc = 10.0;
+                } else {
+                    acc = 5.0;
+                }
+            }
 
             // If too close, push back. otherwise, 
             if d < rmin {

@@ -1,4 +1,4 @@
-const CIRCLES: usize = 10_000;
+const CIRCLES: usize = 1024;
 
 mod camera;
 mod circle;
@@ -177,6 +177,11 @@ impl State {
 
         let mut circles = Vec::with_capacity(CIRCLES);
         for _ in 0..CIRCLES {
+            let color = if random::<f32>() > 0.5 {
+                [1.0, 0.0, 0.0]
+            } else {
+                [0.0, 1.0, 0.0]
+            };
             circles.push(Circle {
                 pos: [
                     (random::<f32>() - 0.5) * 40.0,
@@ -184,7 +189,7 @@ impl State {
                 ],
                 vel: [(random::<f32>() - 0.5) * 2.0, (random::<f32>() - 0.5) * 5.0],
                 rad: 0.25,
-                color: [random(), random(), random()],
+                color,
             });
         }
 
