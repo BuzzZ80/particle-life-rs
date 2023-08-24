@@ -1,5 +1,5 @@
 #[repr(C)]
-#[derive(Clone, Copy, Default, bytemuck::Pod, bytemuck::Zeroable)]
+#[derive(Clone, Copy, Default, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct Circle {
     pub color: [f32; 3],
     pub rad: f32,

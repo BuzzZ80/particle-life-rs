@@ -1,4 +1,4 @@
-const CIRCLES: usize = 1024;
+const CIRCLES: usize = 32000;
 
 mod camera;
 mod circle;
@@ -41,17 +41,19 @@ struct State {
     window: Window,
     render_pipeline: wgpu::RenderPipeline,
     vertex_buffer: wgpu::Buffer,
-
     
     camera: Camera,
     last_frame: Instant,
     camera_buffer: wgpu::Buffer,
     size_buffer: wgpu::Buffer,
+    render_uniform_bind_group: wgpu::BindGroup,
+
     dt_buffer: wgpu::Buffer,
-    uniform_bind_group: wgpu::BindGroup,
-    //circ_buffer: wgpu::Buffer,
-    //circ_bind_group_layout: wgpu::BindGroupLayout,
+    compute_uniform_bind_group: wgpu::BindGroup,
+    circ_buffer: wgpu::Buffer,
     circ_bind_group: wgpu::BindGroup,
+
+    compute_pipeline: wgpu::ComputePipeline,
 }
 
 fn main() {
@@ -171,7 +173,7 @@ impl State {
 
         let camera = Camera {
             pos: [0.0, 0.0],
-            scale: 1.0 / 20.0,
+            scale: 1.0 / 100.0,
             rotation: 0.0,
         };
 
@@ -184,8 +186,8 @@ impl State {
             };
             circles.push(Circle {
                 pos: [
-                    (random::<f32>() - 0.5) * 40.0,
-                    (random::<f32>() - 0.5) * 40.0,
+                    (random::<f32>() - 0.5) * 200.0,
+                    (random::<f32>() - 0.5) * 200.0,
                 ],
                 vel: [(random::<f32>() - 0.5) * 2.0, (random::<f32>() - 0.5) * 5.0],
                 rad: 0.25,
@@ -219,11 +221,11 @@ impl State {
             &wgpu::util::BufferInitDescriptor {
                 label: Some("Circle Buffer"),
                 contents: bytemuck::cast_slice(&circles),
-                usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::STORAGE,
+                usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
             }
         );
 
-        let uniform_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        let render_uniform_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             entries: &[
                 wgpu::BindGroupLayoutEntry {
                     binding: 0,
@@ -237,16 +239,6 @@ impl State {
                 },
                 wgpu::BindGroupLayoutEntry {
                     binding: 1,
-                    visibility: wgpu::ShaderStages::VERTEX,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 2,
                     visibility: wgpu::ShaderStages::VERTEX,
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Uniform,
@@ -259,11 +251,27 @@ impl State {
             label: Some("uniform_bind_group_layout"),
         });
 
+        let compute_uniform_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::COMPUTE | wgpu::ShaderStages::VERTEX,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                }
+            ],
+            label: Some("compute uniform bind group layout"),
+        });
+
         let circ_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             entries: &[
                 wgpu::BindGroupLayoutEntry {
                     binding: 0,
-                    visibility: wgpu::ShaderStages::VERTEX,
+                    visibility: wgpu::ShaderStages::COMPUTE | wgpu::ShaderStages::VERTEX,
                     ty: wgpu::BindingType::Buffer { 
                         ty: wgpu::BufferBindingType::Storage { read_only: false }, 
                         has_dynamic_offset: false, 
@@ -275,8 +283,8 @@ impl State {
             label: Some("circle bind group layout"),
         });
 
-        let uniform_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            layout: &uniform_bind_group_layout,
+        let render_uniform_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            layout: &render_uniform_bind_group_layout,
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
@@ -286,10 +294,6 @@ impl State {
                     binding: 1,
                     resource: size_buffer.as_entire_binding(),
                 },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: dt_buffer.as_entire_binding(),
-                }
             ],
             label: Some("uniform_bind_group"),
         });
@@ -304,12 +308,22 @@ impl State {
             ],
             label: Some("circ bind group"),
         });
-        
+
+        let compute_uniform_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("compute uniform bind group"),
+            layout: &compute_uniform_bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: dt_buffer.as_entire_binding(),
+                }
+            ]
+        });
 
         let render_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("Render Pipeline Layout"),
-                bind_group_layouts: &[&uniform_bind_group_layout, &circ_bind_group_layout],
+                bind_group_layouts: &[&render_uniform_bind_group_layout, &circ_bind_group_layout],
                 push_constant_ranges: &[],
             });
 
@@ -361,6 +375,21 @@ impl State {
             }
         );
 
+        let compute_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("Compute pipeline descriptinator"),
+            bind_group_layouts: &[
+                &compute_uniform_bind_group_layout,
+                &circ_bind_group_layout,
+            ],
+            push_constant_ranges: &[],
+        });
+        let compute_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("Compute pipeline"),
+            layout: Some(&compute_pipeline_layout),
+            module: &shader,
+            entry_point: &"compute_main",
+        });
+
         Self {
             window,
             surface,
@@ -375,11 +404,13 @@ impl State {
             last_frame: Instant::now(),
             camera_buffer,
             size_buffer,
+            render_uniform_bind_group,
+            
             dt_buffer,
-            uniform_bind_group,
-            //circ_buffer,
-            //circ_bind_group_layout,
+            compute_uniform_bind_group,
+            circ_buffer,
             circ_bind_group,
+            compute_pipeline,
         }
     }
 
@@ -400,14 +431,31 @@ impl State {
         false
     }
 
-    fn update(&mut self, ) {
+    fn update(&mut self) {
         self.queue.write_buffer(&self.camera_buffer, 0, bytemuck::cast_slice(&self.camera.transform()));
         self.queue.write_buffer(&self.size_buffer, 0, bytemuck::cast_slice(&[self.size.width, self.size.height]));
-        self.queue.write_buffer(&self.dt_buffer, 0, bytemuck::cast_slice(&[self.last_frame.elapsed().as_secs_f32()]));
+        self.queue.write_buffer(&self.dt_buffer, 0, bytemuck::cast_slice(&[f32::min(0.01, self.last_frame.elapsed().as_secs_f32())]));
 
         println!("{}", self.last_frame.elapsed().as_secs_f32().recip());
         self.last_frame = Instant::now();
+
+        let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("Compute encoder"),
+        });
         
+        {
+            let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("Compute pass"),
+            });
+            compute_pass.set_pipeline(&self.compute_pipeline);
+            compute_pass.set_bind_group(0, &self.compute_uniform_bind_group, &[]);
+            compute_pass.set_bind_group(1, &self.circ_bind_group, &[]);
+            compute_pass.dispatch_workgroups(CIRCLES as u32, 1, 1);
+        }
+
+        self.queue.submit(std::iter::once(encoder.finish()));
+
+        //wgpu::util::DownloadBuffer::read_buffer(&self.device, &self.queue, &self.circ_buffer.slice(..), |r| {if let Ok(buf) = r {println!("{:?}", bytemuck::from_bytes::<[Circle; CIRCLES]>(&buf));}});
     }
 
     fn render(&mut self) -> Result<(), wgpu::SurfaceError> {
@@ -439,7 +487,7 @@ impl State {
                 depth_stencil_attachment: None,
             });
             render_pass.set_pipeline(&self.render_pipeline);
-            render_pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+            render_pass.set_bind_group(0, &self.render_uniform_bind_group, &[]);
             render_pass.set_bind_group(1, &self.circ_bind_group, &[]);
             render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
             render_pass.draw(0..6, 0..CIRCLES as u32);
