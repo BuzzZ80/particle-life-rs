@@ -1,4 +1,21 @@
-const CIRCLES: usize = 32000;
+const CIRCLES: usize = 10000;
+
+const NUM_COLORS: u32 = 3;
+const COLORS: [[u8; 4]; NUM_COLORS as usize] = [
+    [255, 0, 0, 255],   // RED
+    [0, 255, 0, 255],   // GREEN
+    [0, 0, 255, 255],   // BLUE
+
+];
+const CONSTRAINTS: [[[f32; 4]; NUM_COLORS as usize]; NUM_COLORS as usize] = [
+    [[5.0, 0.0, 0.0, 0.0], [0.5, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0]],
+    [[0.0, 0.0, 0.0, 0.0], [5.0, 0.0, 0.0, 0.0], [0.5, 0.0, 0.0, 0.0]],
+    [[10.5, 0.0, 0.0, 0.0], [10.0, 0.0, 0.0, 0.0], [10.0, 0.0, 0.0, 0.0]]
+];
+
+const ZOOM: f32 = 40.0;
+const CAMERA_MOVE_SPEED: f32 = 20.0;
+const CAMERA_ZOOM_SPEED: f32 = 2.0;
 
 mod camera;
 mod circle;
@@ -33,6 +50,8 @@ const SQUARE_SHAPE: &[Vertex] = &[
 ];
 
 struct State {
+    pause: bool,
+
     surface: wgpu::Surface,
     device: wgpu::Device,
     queue: wgpu::Queue,
@@ -54,6 +73,8 @@ struct State {
     circ_bind_group: wgpu::BindGroup,
 
     compute_pipeline: wgpu::ComputePipeline,
+
+    keys: [bool; 256],
 }
 
 fn main() {
@@ -70,6 +91,11 @@ fn main() {
             WindowEvent::CloseRequested => *control_flow = ControlFlow::Exit,
             WindowEvent::KeyboardInput { input, .. } => match input.virtual_keycode {
                 Some(VirtualKeyCode::Escape) => *control_flow = ControlFlow::Exit,
+                Some(VirtualKeyCode::Space) if matches!(input.state, ElementState::Pressed) => state.pause = !state.pause,
+                Some(k) => state.keys[k as usize] = match input.state {
+                    ElementState::Pressed => true,
+                    ElementState::Released => false,
+                },
                 _ => {}
             },
             WindowEvent::Resized(physical_size) => {
@@ -78,7 +104,7 @@ fn main() {
             WindowEvent::ScaleFactorChanged { new_inner_size, .. } => {
                 state.resize(**new_inner_size);
             }
-            _ => {}
+            w => state.input(w),
         },
         Event::RedrawRequested(window_id) if window_id == state.window().id() => {
             state.update();
@@ -173,25 +199,19 @@ impl State {
 
         let camera = Camera {
             pos: [0.0, 0.0],
-            scale: 1.0 / 100.0,
-            rotation: 0.0,
+            scale: 1.0 / ZOOM,
         };
 
         let mut circles = Vec::with_capacity(CIRCLES);
         for _ in 0..CIRCLES {
-            let color = if random::<f32>() > 0.5 {
-                [1.0, 0.0, 0.0]
-            } else {
-                [0.0, 1.0, 0.0]
-            };
             circles.push(Circle {
                 pos: [
-                    (random::<f32>() - 0.5) * 200.0,
-                    (random::<f32>() - 0.5) * 200.0,
+                    (random::<f32>() - 0.5) * 2.0 * ZOOM,
+                    (random::<f32>() - 0.5) * 2.0 * ZOOM,
                 ],
                 vel: [(random::<f32>() - 0.5) * 2.0, (random::<f32>() - 0.5) * 5.0],
-                rad: 0.25,
-                color,
+                rad: 0.125,
+                color: (random::<f32>() * NUM_COLORS as f32) as i32,
             });
         }
 
@@ -216,6 +236,83 @@ impl State {
                 usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             }
         );
+
+        let colors_tex_size = wgpu::Extent3d { 
+            width: NUM_COLORS,
+            height: 1,
+            depth_or_array_layers: 1,
+        };
+        let colors_tex = device.create_texture(
+            &wgpu::TextureDescriptor {
+                label: Some("Colors buffer"),
+                size: colors_tex_size,
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D1,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            }
+        );
+        queue.write_texture(
+            wgpu::ImageCopyTexture {
+                texture: &colors_tex,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            }, 
+            bytemuck::cast_slice(&COLORS), 
+            wgpu::ImageDataLayout {
+                offset: 0,
+                bytes_per_row: Some(4 * NUM_COLORS),
+                rows_per_image: Some(1),
+            }, 
+            colors_tex_size,
+        );
+        let colors_tex_view = colors_tex.create_view(&wgpu::TextureViewDescriptor::default());
+
+        let constraints_tex_size = wgpu::Extent3d { 
+            width: NUM_COLORS,
+            height: NUM_COLORS,
+            depth_or_array_layers: 1,
+        };
+        let constraints_tex = device.create_texture(
+            &wgpu::TextureDescriptor {
+                label: Some("Constraints buffer"),
+                size: constraints_tex_size,
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba32Float,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            }
+        );
+        queue.write_texture(
+            wgpu::ImageCopyTexture {
+                texture: &constraints_tex,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            }, 
+            bytemuck::cast_slice(&CONSTRAINTS), 
+            wgpu::ImageDataLayout {
+                offset: 0,
+                bytes_per_row: Some(16 * NUM_COLORS),
+                rows_per_image: Some(NUM_COLORS),
+            }, 
+            constraints_tex_size,
+        );
+        let constraints_tex_view = constraints_tex.create_view(&wgpu::TextureViewDescriptor::default());
+
+        let data_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            address_mode_u: wgpu::AddressMode::Repeat,
+            address_mode_v: wgpu::AddressMode::Repeat,
+            address_mode_w: wgpu::AddressMode::Repeat,
+            mag_filter: wgpu::FilterMode::Nearest,
+            mipmap_filter: wgpu::FilterMode::Nearest,
+            .. Default::default()
+        });
 
         let circ_buffer = device.create_buffer_init(
             &wgpu::util::BufferInitDescriptor {
@@ -247,6 +344,22 @@ impl State {
                     },
                     count: None,
                 },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture { 
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true }, 
+                        view_dimension: wgpu::TextureViewDimension::D1, 
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
             ],
             label: Some("uniform_bind_group_layout"),
         });
@@ -255,14 +368,40 @@ impl State {
             entries: &[
                 wgpu::BindGroupLayoutEntry {
                     binding: 0,
-                    visibility: wgpu::ShaderStages::COMPUTE | wgpu::ShaderStages::VERTEX,
+                    visibility: wgpu::ShaderStages::COMPUTE,
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Uniform,
                         has_dynamic_offset: false,
                         min_binding_size: None,
                     },
                     count: None,
-                }
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Texture { 
+                        sample_type: wgpu::TextureSampleType::Float { filterable: false }, 
+                        view_dimension: wgpu::TextureViewDimension::D2, 
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Texture { 
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true }, 
+                        view_dimension: wgpu::TextureViewDimension::D1, 
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
             ],
             label: Some("compute uniform bind group layout"),
         });
@@ -294,6 +433,14 @@ impl State {
                     binding: 1,
                     resource: size_buffer.as_entire_binding(),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::TextureView(&colors_tex_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::Sampler(&data_sampler),
+                },
             ],
             label: Some("uniform_bind_group"),
         });
@@ -316,7 +463,19 @@ impl State {
                 wgpu::BindGroupEntry {
                     binding: 0,
                     resource: dt_buffer.as_entire_binding(),
-                }
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(&constraints_tex_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::TextureView(&colors_tex_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::Sampler(&data_sampler),
+                },
             ]
         });
 
@@ -391,6 +550,8 @@ impl State {
         });
 
         Self {
+            pause: true,
+
             window,
             surface,
             device,
@@ -411,6 +572,8 @@ impl State {
             circ_buffer,
             circ_bind_group,
             compute_pipeline,
+
+            keys: [false; 256],
         }
     }
 
@@ -427,17 +590,27 @@ impl State {
         }
     }
 
-    fn _input(&mut self, _event: &WindowEvent) -> bool {
-        false
-    }
+    fn input(&mut self, _event: &WindowEvent) {}
 
     fn update(&mut self) {
+        let dt = f32::min(0.005, self.last_frame.elapsed().as_secs_f32());
+
         self.queue.write_buffer(&self.camera_buffer, 0, bytemuck::cast_slice(&self.camera.transform()));
         self.queue.write_buffer(&self.size_buffer, 0, bytemuck::cast_slice(&[self.size.width, self.size.height]));
-        self.queue.write_buffer(&self.dt_buffer, 0, bytemuck::cast_slice(&[f32::min(0.01, self.last_frame.elapsed().as_secs_f32())]));
+        self.queue.write_buffer(&self.dt_buffer, 0, bytemuck::cast_slice(&[dt]));
+
+        if self.keys[VirtualKeyCode::W as usize] { self.camera.pos[1] -= CAMERA_MOVE_SPEED * dt}
+        if self.keys[VirtualKeyCode::A as usize] { self.camera.pos[0] += CAMERA_MOVE_SPEED * dt}
+        if self.keys[VirtualKeyCode::S as usize] { self.camera.pos[1] += CAMERA_MOVE_SPEED * dt}
+        if self.keys[VirtualKeyCode::D as usize] { self.camera.pos[0] -= CAMERA_MOVE_SPEED * dt}
+        if self.keys[VirtualKeyCode::Up as usize] { self.camera.scale *= 1.0 + CAMERA_ZOOM_SPEED * dt}
+        if self.keys[VirtualKeyCode::Down as usize] { self.camera.scale *= 1.0 - CAMERA_ZOOM_SPEED * dt}
+        self.camera.scale = self.camera.scale.clamp(0.0, 1.0);
 
         println!("{}", self.last_frame.elapsed().as_secs_f32().recip());
         self.last_frame = Instant::now();
+
+        if self.pause { return; }
 
         let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("Compute encoder"),
