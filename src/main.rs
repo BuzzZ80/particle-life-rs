@@ -1,19 +1,22 @@
-const CIRCLES: usize = 10000;
+const CIRCLES: usize = 3000;
 
-const NUM_COLORS: u32 = 3;
+const NUM_COLORS: u32 = 6;
 const COLORS: [[u8; 4]; NUM_COLORS as usize] = [
     [255, 0, 0, 255],   // RED
+    [255, 128, 0, 255],   // ORANGE
+    [255, 255, 0, 255],   // YELLOW
     [0, 255, 0, 255],   // GREEN
     [0, 0, 255, 255],   // BLUE
+    [255, 0, 255, 255],   // PURPLE
 
 ];
-const CONSTRAINTS: [[[f32; 4]; NUM_COLORS as usize]; NUM_COLORS as usize] = [
-    [[5.0, 0.0, 0.0, 0.0], [0.5, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0]],
-    [[0.0, 0.0, 0.0, 0.0], [5.0, 0.0, 0.0, 0.0], [0.5, 0.0, 0.0, 0.0]],
-    [[10.5, 0.0, 0.0, 0.0], [10.0, 0.0, 0.0, 0.0], [10.0, 0.0, 0.0, 0.0]]
-];
+/*const CONSTRAINTS: [[[f32; 4]; NUM_COLORS as usize]; NUM_COLORS as usize] = [
+    [[1.0, 0.0, 0.0, 0.0], [0.2, 0.0, 0.0, 0.0], [-0.2, 0.0, 0.0, 0.0]],
+    [[-0.2, 0.0, 0.0, 0.0], [1.0, 0.0, 0.0, 0.0], [0.2, 0.0, 0.0, 0.0]],
+    [[0.2, 0.0, 0.0, 0.0], [-0.2, 0.0, 0.0, 0.0], [1.0, 0.0, 0.0, 0.0]]
+];*/
 
-const ZOOM: f32 = 40.0;
+const ZOOM: f32 = 20.0;
 const CAMERA_MOVE_SPEED: f32 = 20.0;
 const CAMERA_ZOOM_SPEED: f32 = 2.0;
 
@@ -70,6 +73,7 @@ struct State {
     dt_buffer: wgpu::Buffer,
     compute_uniform_bind_group: wgpu::BindGroup,
     circ_buffer: wgpu::Buffer,
+    constraints_tex: wgpu::Texture,
     circ_bind_group: wgpu::BindGroup,
 
     compute_pipeline: wgpu::ComputePipeline,
@@ -92,6 +96,7 @@ fn main() {
             WindowEvent::KeyboardInput { input, .. } => match input.virtual_keycode {
                 Some(VirtualKeyCode::Escape) => *control_flow = ControlFlow::Exit,
                 Some(VirtualKeyCode::Space) if matches!(input.state, ElementState::Pressed) => state.pause = !state.pause,
+                Some(VirtualKeyCode::R) if matches!(input.state, ElementState::Pressed) => state.randomize_constraints(),
                 Some(k) => state.keys[k as usize] = match input.state {
                     ElementState::Pressed => true,
                     ElementState::Released => false,
@@ -215,6 +220,16 @@ impl State {
             });
         }
 
+        let mut constraints: [[[f32; 4]; NUM_COLORS as usize]; NUM_COLORS as usize] = std::default::Default::default();
+        for i in 0..NUM_COLORS as usize {
+            let mut attractions: [[f32; 4]; NUM_COLORS as usize] = std::default::Default::default();
+            for j in 0..NUM_COLORS as usize {
+                attractions[j] = [(random::<f32>() - 0.5), 0.0, 0.0, 0.0];
+            }
+            constraints[i] = attractions;
+        }
+        //let constraints = CONSTRAINTS;
+
         let camera_buffer = device.create_buffer_init(
             &wgpu::util::BufferInitDescriptor {
                 label: Some("Camera Buffer"),
@@ -295,7 +310,7 @@ impl State {
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
             }, 
-            bytemuck::cast_slice(&CONSTRAINTS), 
+            bytemuck::cast_slice(&constraints), 
             wgpu::ImageDataLayout {
                 offset: 0,
                 bytes_per_row: Some(16 * NUM_COLORS),
@@ -570,6 +585,7 @@ impl State {
             dt_buffer,
             compute_uniform_bind_group,
             circ_buffer,
+            constraints_tex,
             circ_bind_group,
             compute_pipeline,
 
@@ -590,7 +606,7 @@ impl State {
         }
     }
 
-    fn input(&mut self, _event: &WindowEvent) {}
+    fn input(&mut self, event: &WindowEvent) {}
 
     fn update(&mut self) {
         let dt = f32::min(0.005, self.last_frame.elapsed().as_secs_f32());
@@ -607,7 +623,7 @@ impl State {
         if self.keys[VirtualKeyCode::Down as usize] { self.camera.scale *= 1.0 - CAMERA_ZOOM_SPEED * dt}
         self.camera.scale = self.camera.scale.clamp(0.0, 1.0);
 
-        println!("{}", self.last_frame.elapsed().as_secs_f32().recip());
+        //println!("{}", self.last_frame.elapsed().as_secs_f32().recip());
         self.last_frame = Instant::now();
 
         if self.pause { return; }
@@ -671,6 +687,39 @@ impl State {
         output.present();
 
         Ok(())
+    }
+
+    fn randomize_constraints(&mut self) {
+        println!("r pressed");
+        let mut constraints: [[[f32; 4]; NUM_COLORS as usize]; NUM_COLORS as usize] = std::default::Default::default();
+        for i in 0..NUM_COLORS as usize {
+            let mut attractions: [[f32; 4]; NUM_COLORS as usize] = std::default::Default::default();
+            for j in 0..NUM_COLORS as usize {
+                attractions[j] = [(random::<f32>() - 0.5) * 2.0, 0.0, 0.0, 0.0];
+            }
+            constraints[i] = attractions;
+        }
+
+        let constraints_tex_size = wgpu::Extent3d { 
+            width: NUM_COLORS,
+            height: NUM_COLORS,
+            depth_or_array_layers: 1,
+        };
+        self.queue.write_texture(
+            wgpu::ImageCopyTexture {
+                texture: &self.constraints_tex,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            }, 
+            bytemuck::cast_slice(&constraints), 
+            wgpu::ImageDataLayout {
+                offset: 0,
+                bytes_per_row: Some(16 * NUM_COLORS),
+                rows_per_image: Some(NUM_COLORS),
+            }, 
+            constraints_tex_size,
+        );
     }
 }
 

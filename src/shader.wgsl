@@ -24,33 +24,40 @@ fn compute_main(
 ) {
     let i = wgid.x;
 
-    let rmin: f32 = 3.0;
-    let racc: f32 = 2.0;
-    let rmax: f32 = 5.0;
+    let racc: f32 = 1.0;
+    let rmax: f32 = 2.0;
+    let rmin: f32 = 0.3 * rmax;
 
-    let mu: f32 = 2.0;
+    let mu: f32 = 5.0;
+    let ff: f32 = 1.0;
+
+    let world_size = 25.0;
 
     var a = vec2(0.0, 0.0);
 
     for (var j: u32 = u32(1); j < wgs.x; j++) {
         // get vector and length between self and other
         let diff = circles[i].pos - circles[j].pos;
-        let d = length(diff);
+        let d = length(diff) / rmax;
         if (diff.x == 0.0) || (diff.y == 0.0) || (d >= rmax) {continue;}
 
-        var acc = textureLoad(constraints, vec2(circles[i].color, circles[j].color), 0).x;
+        var acc = ff * textureLoad(constraints, vec2(circles[i].color, circles[j].color), 0).x;
 
         if d < rmin {
-            a -= normalize(diff) * racc * (d / rmin - 1.0);
+            a -= normalize(diff) * racc * ((d/rmin) - 1.0);
         } else {
-            a -= normalize(diff) * -(acc/rmax)*(d-rmin)*(d-rmax);
+            a += normalize(diff) * acc * (1.0 - abs(2.0 * d - 1.0 - rmin)/(1.0-rmin));
         }
+    }
+
+    if length(circles[i].pos) > world_size {
+        a -= normalize(circles[i].pos) * (length(circles[i].pos) - world_size) * 25.0;
     }
 
     a -= (mu * pow(length(circles[i].vel), 2.0)) * normalize(circles[i].vel);
 
-    circles[i].vel += min(a * dt, vec2(1.0, 1.0));
-    circles[i].pos += min(circles[i].vel * dt, vec2(1.0, 1.0)); 
+    circles[i].vel += a * rmax * dt;
+    circles[i].pos += circles[i].vel * dt; 
 }
 
 struct VertexInput {

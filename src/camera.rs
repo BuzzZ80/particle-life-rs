@@ -1,5 +1,3 @@
-use cgmath::Matrix4;
-
 pub struct Camera {
     pub pos: [f32; 2],
     pub scale: f32,
@@ -17,9 +15,3 @@ impl Camera {
         ]
     }
 }
-/*[
-    [ s  ,  0.0, 0.0, 0.0],
-    [ 0.0,  s  , 0.0, 0.0],
-    [ 0.0,  0.0, 1.0, 0.0],
-    [t[0], t[1], 0.0, 1.0],
-]*/
