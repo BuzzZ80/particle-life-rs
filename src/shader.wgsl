@@ -43,6 +43,9 @@ fn compute_main(
 
         var acc = ff * textureLoad(constraints, vec2(circles[i].color, circles[j].color), 0).x;
 
+        if d <= 0.125 {
+            circles[i].pos += normalize(diff) * d/2.;
+        }
         if d < rmin {
             a -= normalize(diff) * racc * ((d/rmin) - 1.0);
         } else {
